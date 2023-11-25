@@ -1,0 +1,232 @@
+--DATA ASSESSMENT
+--Number of aisles
+SELECT COUNT(aisle_id) FROM aisles;
+
+--Number of departments
+SELECT COUNT(department_id) FROM departments;
+
+--Number of orders_id in orders table
+SELECT COUNT(order_id) FROM orders;
+
+--Number of users
+SELECT COUNT(DISTINCT user_id) AS number_of_users FROM orders;
+
+--Number of orders and distinct orders in order_products_prior table
+SELECT COUNT(order_id) AS total_orders,
+	COUNT(DISTINCT order_id) AS distinct_orders 
+	FROM order_products_prior;
+
+--Number of orders and distinct orders in order_products_train table
+SELECT COUNT(order_id) AS total_orders,
+	COUNT(DISTINCT order_id) AS distinct_orders 
+	FROM order_products_train;
+
+--Number of products 
+SELECT COUNT(product_id) FROM products;
+
+--Number of departments and aisles
+SELECT COUNT(DISTINCT department_id) AS departments, 
+	COUNT(DISTINCT aisle_id) AS aisles FROM products;
+
+ --Evaluation classification
+SELECT eval_set, COUNT (eval_set) AS total_number FROM orders
+GROUP BY eval_set;
+
+--DATA CLEANING
+--No null values
+
+--DATA TRANSFORMATION
+--Add aisle and department columns to products table
+ALTER TABLE products
+ADD COLUMN aisle character (100),
+ADD COLUMN department character(100);
+
+--Merge products and aisles
+MERGE INTO products p
+USING aisles a
+ON p.aisle_id = a.aisle_id
+WHEN MATCHED
+THEN UPDATE SET aisle = a.aisle 
+WHEN NOT MATCHED THEN DO NOTHING
+
+--Merge products and department
+MERGE INTO products p
+USING departments d
+ON p.department_id = d.department_id
+WHEN MATCHED
+THEN UPDATE SET department = d.department
+WHEN NOT MATCHED THEN DO NOTHING
+
+SELECT COUNT(product_id) FROM products;
+SELECT * FROM products
+LIMIT 5;
+
+--EXPLORATORY DATA ANALYSIS
+--Order day of the week
+SELECT order_dow, COUNT (order_dow) AS total_number FROM orders
+GROUP BY order_dow;
+
+--Order hour of the day
+SELECT order_hour_of_day, COUNT (order_hour_of_day) AS total_number FROM orders
+GROUP BY order_hour_of_day;
+
+--Number of products each department has
+SELECT department, COUNT(product_name) AS number_of_products FROM products
+GROUP BY department
+ORDER BY COUNT(product_name) DESC;
+
+--Top 15 aisles in terms of number of products
+SELECT aisle, COUNT(product_name) AS number_of_products FROM products
+GROUP BY aisle
+ORDER BY COUNT(product_name) DESC
+LIMIT 15;
+
+--Bottom 15 aisles in terms of number of products
+SELECT aisle, COUNT(product_name) AS number_of_products FROM products
+GROUP BY aisle
+ORDER BY COUNT(product_name)
+LIMIT 15;
+
+--DATA ANALYSIS AND INSIGHTS
+--MARKET BASKET ANALYSIS
+--1. Top 5 products that are most commonly added to the cart first
+SELECT p.product_name, COUNT(product_name)
+FROM order_products_prior op
+JOIN products p
+ON op.product_id = p.product_id
+WHERE add_to_cart_order = 1
+GROUP BY product_name
+ORDER BY COUNT(product_name) DESC
+LIMIT 5;
+
+--2. Number of unique products typically included in a single order
+SELECT ROUND(AVG (count),0) AS avg_single_order FROM (
+	SELECT COUNT(DISTINCT product_id) AS count FROM order_products_prior
+	GROUP BY order_id
+	) AS average
+	
+--3. Top 10 product pairs that are most frequently purchased together
+SELECT
+    p1.product_name AS product1,
+    p2.product_name AS product2,
+    COUNT(*) AS frequency
+FROM order_products_prior a
+JOIN order_products_prior b
+ON
+    a.order_id = b.order_id
+    AND a.product_id < b.product_id  
+JOIN products p1
+ON p1.product_id = a.product_id
+JOIN products p2
+ON p2.product_id = b.product_id
+GROUP BY
+    p1.product_name,
+    p2.product_name
+ORDER BY frequency DESC
+LIMIT 10;
+
+--CUSTOMER SEGMENTATION
+--1. Number of orders placed by each customer
+SELECT user_id, COUNT(user_id) FROM orders
+WHERE eval_set = 'prior'
+GROUP BY user_id;
+
+SELECT MAX(number_of_orders), MIN(number_of_orders),
+ROUND (AVG(number_of_orders),0) FROM (
+	SELECT user_id, COUNT(user_id) AS number_of_orders FROM orders
+	WHERE eval_set = 'prior'
+	GROUP BY user_id
+	) AS count;
+
+--2. Customer segments based on purchase frequency
+--First determined the percentiles of number of orders that can be used for customer segmentation
+SELECT
+	MIN(number_of_orders) AS min,
+	PERCENTILE_CONT(0.25) WITHIN GROUP(ORDER BY number_of_orders) AS lowerq,
+	PERCENTILE_CONT(0.5) WITHIN GROUP(ORDER BY number_of_orders) AS median,
+	PERCENTILE_CONT(0.75) WITHIN GROUP(ORDER BY number_of_orders) AS upperq,
+	MAX(number_of_orders) AS max
+FROM (
+	SELECT user_id, COUNT(user_id) AS number_of_orders FROM orders
+	WHERE eval_set = 'prior'
+	GROUP BY user_id) AS count;
+	
+--Then segmented purchase frequency based on the percentile
+SELECT 
+	SUM (CASE
+		   WHEN number_of_orders < 5 THEN 1
+		   ELSE 0
+		   END) AS "< 5 orders",
+	SUM (CASE
+		  WHEN number_of_orders > 4 AND number_of_orders < 9 THEN 1
+		  ELSE 0
+		  END) AS "5 to 8 orders",
+	SUM (CASE
+		  WHEN number_of_orders >8 AND number_of_orders < 19 THEN 1
+		  ELSE 0
+		  END) AS "9 to 18 orders",
+	SUM (CASE
+		  WHEN number_of_orders > 18 THEN 1
+		  ELSE 0
+		  END) AS "> 18 orders"
+FROM (
+	SELECT user_id, COUNT(user_id) AS number_of_orders FROM orders
+	WHERE eval_set = 'prior'
+	GROUP BY user_id) AS count;
+
+--SEASONAL TRENDS ANALYSIS
+--1. Distribution of orders placed on different days of the week
+SELECT order_dow, COUNT(order_id) AS daily_orders FROM orders
+WHERE eval_set = 'prior'
+GROUP BY order_dow;
+
+--CUSTOMER CHURN ANALYSIS
+--1. Number of customers who haven't placed an order in the last 30 days
+SELECT COUNT (user_id) AS churned FROM (
+	SELECT user_id FROM orders
+	WHERE days_since_prior_order > 29 AND eval_set = 'prior'
+	GROUP BY user_id
+	ORDER BY user_id
+	) AS churn;
+
+--2. Percentage of customers have churned in the past month
+SELECT (COUNT(DISTINCT user_id) * 100.0 / (SELECT COUNT(DISTINCT user_id) FROM orders WHERE eval_set = 'prior')) AS churn_percentage
+FROM orders
+WHERE days_since_prior_order > 29 AND eval_set = 'prior';
+
+--AISLES AND DEPARTMENT PERFORMANCE
+--1. Top 10 performing aisles
+SELECT aisle, COUNT(o.product_id) 
+FROM order_products_prior o
+JOIN products p
+ON p.product_id = o.product_id
+GROUP BY aisle
+ORDER BY COUNT(o.product_id) DESC
+LIMIT 10;
+
+--2. Bottom 10 performing aisles
+SELECT aisle, COUNT(o.product_id) 
+FROM order_products_prior o
+JOIN products p
+ON p.product_id = o.product_id
+GROUP BY aisle
+ORDER BY COUNT(o.product_id)
+LIMIT 10;
+
+--3. Top 5 performing departments
+SELECT department, COUNT(o.product_id) 
+FROM order_products_prior o
+JOIN products p
+ON p.product_id = o.product_id
+GROUP BY department
+ORDER BY COUNT(o.product_id) DESC
+LIMIT 5;
+
+--4. Bottom 5 performing departments
+SELECT department, COUNT(o.product_id) 
+FROM order_products_prior o
+JOIN products p
+ON p.product_id = o.product_id
+GROUP BY department
+ORDER BY COUNT(o.product_id)
+LIMIT 5;
